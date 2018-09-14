@@ -24,7 +24,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.RequestParam;
 
-import java.util.ArrayList;
+import java.util.List;
 
 /**
  * This class represents the REST GET mechanism to extract the aggregated data
@@ -47,10 +47,18 @@ public class QueryAggregatedObjectControllerImpl implements QueryAggregatedObjec
      * @return ResponseEntity
      */
     public ResponseEntity<QueryResponse> getQueryAggregatedObject(@RequestParam("ID") final String id) {
-        QueryResponse queryResponse= new QueryResponse();
-        ArrayList<String> response = processAggregatedObject.processQueryAggregatedObject(id);
-        queryResponse.setResponseEntity(response.toString());
-        LOGGER.debug("The response is : " + response.toString());
-        return new ResponseEntity(queryResponse, HttpStatus.OK);
+        QueryResponse queryResponse = new QueryResponse();
+        try {
+            List<String> response = processAggregatedObject.processQueryAggregatedObject(id);
+            queryResponse.setResponseEntity(response.toString());
+            LOGGER.debug("The response is: " + response.toString());
+            return new ResponseEntity<>(queryResponse, HttpStatus.OK);
+        } catch (Exception e) {
+            String errorMessage = "Failed to extract the aggregated data from the Aggregated Object based on ID "
+                + id + ". Error message:\n" + e.getMessage();
+            LOGGER.error(errorMessage, e);
+            queryResponse.setResponseEntity(errorMessage);
+            return new ResponseEntity<>(queryResponse, HttpStatus.INTERNAL_SERVER_ERROR);
+        }
     }
 }

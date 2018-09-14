@@ -16,9 +16,8 @@ package com.ericsson.ei.queryservice;
 import com.ericsson.ei.controller.QueryControllerImpl;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.json.JSONArray;
-import org.json.JSONException;
+import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,7 +26,8 @@ import org.springframework.stereotype.Component;
 
 import javax.annotation.PostConstruct;
 import java.io.IOException;
-import java.util.stream.IntStream;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * This class is responsible to fetch the criterias from both the query
@@ -37,66 +37,52 @@ import java.util.stream.IntStream;
 @Component
 public class ProcessQueryParams {
 
-    private static final Logger LOGGER = (Logger) LoggerFactory.getLogger(QueryControllerImpl.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(QueryControllerImpl.class);
 
     @Value("${aggregated.collection.name}")
     private String aggregationCollectionName;
 
-    @Value("${database.name}")
-    private String dataBaseName;
+    @Value("${spring.data.mongodb.database}")
+    private String databaseName;
+    
+    @Value("${aggregated.object.name}")
+    private String objectName;
+    
+    @Value("${search.query.prefix}")
+    private String searchQueryPrefix;
 
-    @Value("${missedNotificationCollectionName}")
-    private String missedNotificationCollectionName;
-
-    @Value("${missedNotificationDataBaseName}")
-    private String missedNotificationDataBaseName;
 
     @Autowired
     private ProcessAggregatedObject processAggregatedObject;
 
-    @Autowired
-    private ProcessMissedNotification processMissedNotification;
-
     /**
-     * This method takes the parameters from the REST POST request body.
-     * If the Aggregated Object matches the condition, then it is returned.
+     * This method takes the parameters from the REST POST request body. If the
+     * Aggregated Object matches the condition, then it is returned.
      *
      * @param request
      * @return JSONArray
      * @throws IOException
      */
-    public JSONArray filterFormParam(JsonNode request) throws IOException {
-        JsonNode criteria = request.get("criteria");
-        JsonNode options = request.get("options");
-        LOGGER.debug("The criteria is : " + criteria.toString());
-        LOGGER.debug("The options is : " + options.toString());
-        if (options.toString().equals("{}") || options.isNull()) {
-            return getProcessQuery(criteria);
+    public JSONArray filterFormParam(JSONObject criteriaObj, JSONObject optionsObj) {
+        JSONArray resultAggregatedObject;
+        String criteria = editObjectNameInQueryParam(criteriaObj);
+        
+        
+        if (optionsObj == null || optionsObj.toString().equals("{}")) {
+            resultAggregatedObject = processAggregatedObject.processQueryAggregatedObject(criteria, databaseName, aggregationCollectionName);
         } else {
-            String result = "{ \"$and\" : [ " + criteria.toString() + "," + options.toString() + " ] }";
-            return getProcessQuery(new ObjectMapper().readTree(result));
+        	String options = editObjectNameInQueryParam(optionsObj); 
+            LOGGER.debug("The options is : " + options);
+            String result = "{ \"$and\" : [ " + criteria + "," + options + " ] }";
+            resultAggregatedObject = processAggregatedObject.processQueryAggregatedObject(result, databaseName, aggregationCollectionName);
         }
+        LOGGER.debug("resultAggregatedObject : " + resultAggregatedObject.toString());
+        return resultAggregatedObject;
     }
 
     /**
-     * This method is responsible for concatenating two JSONArrays.
-     *
-     * @param firstArray
-     * @param secondArray
-     * @return JSONArray
-     * @throws JSONException
-     */
-    private static JSONArray concatArray(JSONArray firstArray, JSONArray secondArray) throws JSONException {
-        JSONArray result = new JSONArray();
-        IntStream.range(0, firstArray.length()).mapToObj(firstArray::get).forEach(result::put);
-        IntStream.range(0, secondArray.length()).mapToObj(secondArray::get).forEach(result::put);
-        return result;
-    }
-
-    /**
-     * This method takes the parameters from the REST GET request query.
-     * If the Aggregated Object matches the condition, then
-     * it is returned.
+     * This method takes the parameters from the REST GET request query. If the
+     * Aggregated Object matches the condition, then it is returned.
      *
      * @param request
      * @return JSONArray
@@ -104,49 +90,29 @@ public class ProcessQueryParams {
     public JSONArray filterQueryParam(String request) {
         LOGGER.debug("The query string is : " + request);
         ObjectMapper mapper = new ObjectMapper();
-        ObjectNode criteria = mapper.createObjectNode();
-        String[] criterias = request.split(",");
-        LOGGER.debug("The query parameters are :");
-        for (String s : criterias) {
-            String[] node = s.split(":");
-            String key = node[0];
-            String value = node[1];
-            LOGGER.debug("The key is : " + key);
-            LOGGER.debug("The value is : " + value);
-            criteria.put(key, value);
-        }
-        LOGGER.debug(criteria.toString());
-        return getProcessQuery(criteria);
-    }
-
-    /**
-     * Process parameters to create a JsonNode request to query the
-     * Aggregated Objects.
-     *
-     * @param criteria
-     * @return
-     */
-    private JSONArray getProcessQuery(JsonNode criteria) {
-        JSONArray resultAggregatedObject = processAggregatedObject.processQueryAggregatedObject(criteria, dataBaseName, aggregationCollectionName);
-        JSONArray resultMissedNotification = processMissedNotification.processQueryMissedNotification(criteria, missedNotificationDataBaseName, missedNotificationCollectionName);
-        LOGGER.debug("resultAggregatedObject : " + resultAggregatedObject.toString());
-        LOGGER.debug("resultMissedNotification : " + resultMissedNotification.toString());
-        JSONArray result = null;
+        JsonNode criteriasJsonNode;
         try {
-            result = ProcessQueryParams.concatArray(resultAggregatedObject, resultMissedNotification);
-        } catch (Exception e) {
-            LOGGER.error(e.getMessage());
+            criteriasJsonNode = mapper.readValue(request, JsonNode.class).get("criteria");
+        } catch (IOException e) {
+            LOGGER.error("Failed to parse FreeStyle query critera field from request:\n" + request);
+            return new JSONArray();
         }
-        LOGGER.debug("Final Result is : " + result.toString());
-        return result;
+        LOGGER.debug("Freestyle criteria query:" + criteriasJsonNode.toString());
+        return processAggregatedObject.processQueryAggregatedObject(criteriasJsonNode.toString(), databaseName, aggregationCollectionName);
     }
 
     @PostConstruct
     public void print() {
-        LOGGER.debug("Values from application.properties file");
-        LOGGER.debug("AggregationCollectionName : " + aggregationCollectionName);
-        LOGGER.debug("AggregationDataBaseName : " + dataBaseName);
-        LOGGER.debug("MissedNotificationCollectionName : " + missedNotificationCollectionName);
-        LOGGER.debug("MissedNotificationDataBaseName : " + missedNotificationDataBaseName);
+        LOGGER.debug("Aggregation Database : " + databaseName
+                + "\nAggregation Collection is : " + aggregationCollectionName);
     }
+    
+    /**
+     * This method takes takes the tesxt as input and replaces all the instances of "object" with the object name in the properties file and return the edited text.
+     * @param  txtObject JSONObject
+     * @return String text after object name replaced with the name configured in the properties file
+     */
+    public String editObjectNameInQueryParam(JSONObject txtObject) {
+        return Pattern.compile("("+ searchQueryPrefix + ".)").matcher(txtObject.toString()).replaceAll(objectName +".");    	
+    }    
 }

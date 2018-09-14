@@ -17,12 +17,15 @@
 package com.ericsson.ei.rules.test;
 
 import static org.junit.Assert.assertEquals;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.io.File;
 
 import org.apache.commons.io.FileUtils;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mockito;
@@ -30,22 +33,27 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.mongo.embedded.EmbeddedMongoAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.RequestBuilder;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import org.springframework.util.SocketUtils;
 
+import com.ericsson.ei.App;
+import com.ericsson.ei.controller.RuleCheckControllerImpl;
 import com.ericsson.ei.services.IRuleCheckService;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 @RunWith(SpringJUnit4ClassRunner.class)
-@SpringBootTest
+@SpringBootTest(classes = { App.class, EmbeddedMongoAutoConfiguration.class // <--- Don't forget THIS
+})
 @AutoConfigureMockMvc
 public class TestRulesRestAPI {
 
@@ -54,21 +62,22 @@ public class TestRulesRestAPI {
     private static final String EXTRACTION_RULE_FILE_PATH = "src/test/resources/ExtractionRule.txt";
     private static final String EVENTS = "src/test/resources/AggregateListEvents.json";
     private static final String RULES = "src/test/resources/AggregateListRules.json";
-    private static final String AGGREATED_RESULT_OBJECT = "src/test/resources/AggregateResultObject.json";
-
-    private static final String ENVIRONMENT_DISABLED = "{\"message\": \"Test environment is not enabled. "
-        + "Please use the test environment for this execution\"}";
+    private static final String AGGREGATED_RESULT_OBJECT = "src/test/resources/AggregateResultObject.json";
 
     @Autowired
     private MockMvc mockMvc;
-
-    private ObjectMapper mapper = new ObjectMapper();
 
     @MockBean
     private IRuleCheckService ruleCheckService;
 
     @Value("${testaggregated.enabled:false}")
     private Boolean testEnable;
+
+    @BeforeClass
+    public static void init() {
+        int port = SocketUtils.findAvailableTcpPort();
+        System.setProperty("spring.data.mongodb.port", "" + port);
+    }
 
     @Test
     public void testJmesPathRestApi() throws Exception {
@@ -80,8 +89,16 @@ public class TestRulesRestAPI {
         } catch (Exception e) {
             LOGGER.error(e.getMessage(), e);
         }
-        RequestBuilder requestBuilder = MockMvcRequestBuilders.post("/rules/rule-check").accept(MediaType.ALL)
-                .param("rule", extractionRules_test).content(jsonInput).contentType(MediaType.APPLICATION_JSON);
+
+        String requestBody = new JSONObject()
+                .put("rule", new JSONObject(extractionRules_test))
+                .put("event", new JSONObject(jsonInput))
+                .toString();
+
+        RequestBuilder requestBuilder = MockMvcRequestBuilders.post("/rules/rule-check")
+                .accept(MediaType.ALL)
+                .content(requestBody)
+                .contentType(MediaType.APPLICATION_JSON);
         MvcResult result = mockMvc.perform(requestBuilder).andReturn();
         String resultStr = result.getResponse().getContentAsString();
         JSONObject obj = new JSONObject(resultStr);
@@ -101,13 +118,15 @@ public class TestRulesRestAPI {
         try {
             jsonInput = new JSONArray(FileUtils.readFileToString(new File(EVENTS), "UTF-8"));
             extractionRules_test = new JSONArray(FileUtils.readFileToString(new File(RULES), "UTF-8"));
-            aggregatedResult = FileUtils.readFileToString(new File(AGGREATED_RESULT_OBJECT), "UTF-8");
+            aggregatedResult = FileUtils.readFileToString(new File(AGGREGATED_RESULT_OBJECT), "UTF-8");
             expectedAggObject = new JSONArray(aggregatedResult);
         } catch (Exception e) {
             LOGGER.error(e.getMessage(), e);
         }
-        String body = "{\"listRulesJson\":" + extractionRules_test.toString() + ",\"listEventsJson\":" + jsonInput.toString() + "}";
-        Mockito.when(ruleCheckService.prepareAggregatedObject(Mockito.any(JSONArray.class), Mockito.any(JSONArray.class)))
+        String body = "{\"listRulesJson\":" + extractionRules_test.toString() + ",\"listEventsJson\":"
+                + jsonInput.toString() + "}";
+        Mockito.when(
+                ruleCheckService.prepareAggregatedObject(Mockito.any(JSONArray.class), Mockito.any(JSONArray.class)))
                 .thenReturn(aggregatedResult);
         RequestBuilder requestBuilder = MockMvcRequestBuilders.post("/rules/rule-check/aggregation")
                 .accept(MediaType.ALL).content(body).contentType(MediaType.APPLICATION_JSON);
@@ -119,9 +138,35 @@ public class TestRulesRestAPI {
             assertEquals(expectedAggObject.toString(), actualAggObject.toString());
         } else {
             assertEquals(HttpStatus.SERVICE_UNAVAILABLE.value(), result.getResponse().getStatus());
-            assertEquals(ENVIRONMENT_DISABLED, resultStr);
         }
+    }
+
+    @Test
+    public void testGetTestRulePageEnabledAPI_setPropertyDefult() throws Exception {
+        String responseBody = new JSONObject().put("status", false).toString();
+        mockMvc.perform(MockMvcRequestBuilders.get("/rules/rule-check/testRulePageEnabled")
+                .accept(MediaType.APPLICATION_JSON_VALUE)).andExpect(status().isOk())
+                .andExpect(content().string(responseBody)).andReturn();
+    }
+
+    @Test
+    public void testGetTestRulePageEnabledAPI_setPropertyTrue() throws Exception {
+        String responseBody = new JSONObject().put("status", true).toString();
+        RuleCheckControllerImpl ruleCheckControllerImpl = new RuleCheckControllerImpl();
+        ruleCheckControllerImpl.setTestEnable(true);
+        ResponseEntity<?> responseEntity = ruleCheckControllerImpl.getTestRulePageEnabled();
+        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
+        assertEquals(responseBody, responseEntity.getBody().toString());
 
     }
 
+    @Test
+    public void testGetTestRulePageEnabledAPI_setPropertyFalse() throws Exception {
+        String responseBody = new JSONObject().put("status", false).toString();
+        RuleCheckControllerImpl ruleCheckControllerImpl = new RuleCheckControllerImpl();
+        ruleCheckControllerImpl.setTestEnable(false);
+        ResponseEntity<?> responseEntity = ruleCheckControllerImpl.getTestRulePageEnabled();
+        assertEquals(HttpStatus.OK, responseEntity.getStatusCode());
+        assertEquals(responseBody, responseEntity.getBody().toString());
+    }
 }

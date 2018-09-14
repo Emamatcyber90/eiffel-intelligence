@@ -21,6 +21,7 @@ import static org.junit.Assert.*;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.List;
 
 import org.apache.commons.io.FileUtils;
 import org.junit.Before;
@@ -54,8 +55,8 @@ public class TestWaitListStorageHandler {
     public void init() throws IOException{
         MockitoAnnotations.initMocks(this);
         output.add(FileUtils.readFileToString(new File(inputJson1), "UTF-8"));
-        Mockito.when(mongoDBHandler.getAllDocuments(Mockito.anyString(), Mockito.anyString())).thenReturn(output);
-        Mockito.when(mongoDBHandler.insertDocument(Mockito.anyString(), Mockito.anyString(),Mockito.anyString())).thenReturn(true);
+        Mockito.when(mongoDBHandler.getAllDocuments(Mockito.any(), Mockito.any())).thenReturn(output);
+        Mockito.when(mongoDBHandler.insertDocument(Mockito.any(), Mockito.any(),Mockito.anyString())).thenReturn(true);
         waitListStorageHandler.setMongoDbHandler(mongoDBHandler);
         waitListStorageHandler.setJmesPathInterface(jmespath);
     }
@@ -79,7 +80,7 @@ public class TestWaitListStorageHandler {
 
     @Test
     public void testGetWaitListEvents(){
-        ArrayList<String> documents = waitListStorageHandler.getWaitList();
+        List<String> documents = waitListStorageHandler.getWaitList();
         assertTrue(documents.size() > 0);
     }
 

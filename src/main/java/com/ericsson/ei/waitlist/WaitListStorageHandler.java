@@ -16,37 +16,39 @@
 */
 package com.ericsson.ei.waitlist;
 
-import java.text.DateFormat;
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Date;
+import com.ericsson.ei.jmespath.JmesPathInterface;
+import com.ericsson.ei.mongodbhandler.MongoDBHandler;
+import com.ericsson.ei.rules.RulesObject;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.mongodb.BasicDBObject;
 
 import lombok.Getter;
 import lombok.Setter;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import com.ericsson.ei.jmespath.JmesPathInterface;
-import com.ericsson.ei.mongodbhandler.MongoDBHandler;
-import com.ericsson.ei.rules.RulesObject;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.mongodb.BasicDBObject;
-import com.mongodb.util.JSON;
+import java.text.DateFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.List;
 
 @Component
 public class WaitListStorageHandler {
-    static Logger log = (Logger) LoggerFactory.getLogger(WaitListStorageHandler.class);
+    private static final Logger LOGGER = (Logger) LoggerFactory.getLogger(WaitListStorageHandler.class);
 
     @Getter
     @Value("${waitlist.collection.name}")
     private String collectionName;
 
     @Getter
-    @Value("${database.name}")
+    @Value("${spring.data.mongodb.database}")
     private String databaseName;
 
     @Getter
@@ -62,65 +64,42 @@ public class WaitListStorageHandler {
     private JmesPathInterface jmesPathInterface;
 
     public void addEventToWaitList(String event, RulesObject rulesObject) throws Exception {
-        String input = addProprtiesToEvent(event, rulesObject);
-        boolean result=mongoDbHandler.insertDocument(databaseName,collectionName, input);
-        if (result == false) {
-            throw new Exception("failed to insert the document into database");
-        }
-        updateTestEventCount(true);
-    }
-
-    private String addProprtiesToEvent(String event, RulesObject rulesObject) {
-        String time = null;
-        Date date=null;
-        String idRule = rulesObject.getIdRule();
-        JsonNode id = jmesPathInterface.runRuleOnEvent(idRule, event);
-        String condition = "{Event:" + JSON.parse(event).toString()+"}";
-        ArrayList<String> documents = mongoDbHandler.find(databaseName, collectionName, condition);
-        if (documents.size() == 0){
-            DateFormat dateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss");
-            date = new Date();
-            time = dateFormat.format(date);
-            try {
-                date=dateFormat.parse(time);
-            } catch (ParseException e) {
-                log.info(e.getMessage(),e);
+        String condition = "{\"_id\" : \"" + new JSONObject(event).getJSONObject("meta").getString("id") + "\"}";
+        List<String> foundEventsInWaitList = mongoDbHandler.find(databaseName, collectionName, condition);
+        if (foundEventsInWaitList.isEmpty()) {
+            String input = addPropertiesToEvent(event, rulesObject);
+            boolean result = mongoDbHandler.insertDocument(databaseName, collectionName, input);
+            if (!result) {
+                throw new Exception("Failed to insert the document into database");
             }
-
         }
-        BasicDBObject document = new BasicDBObject();
-        document.put("_id", id.textValue());
-        document.put("Time",  date);
-        document.put("Event", JSON.parse(event));
-        mongoDbHandler.createTTLIndex(databaseName, collectionName, "Time",ttlValue);
-        return document.toString();
-    }
-
-    public ArrayList<String> getWaitList() {
-        ArrayList<String> documents = mongoDbHandler.getAllDocuments(databaseName,collectionName);
-        return documents;
     }
 
     public boolean dropDocumentFromWaitList(String document) {
-        boolean result = mongoDbHandler.dropDocument(databaseName, collectionName, document);
-
-        if (result) {
-            updateTestEventCount(false);
-        }
-
-        return result;
+        return mongoDbHandler.dropDocument(databaseName, collectionName, document);
     }
 
-    private void updateTestEventCount(boolean increase) {
-        if (System.getProperty("flow.test") == "true") {
-            String countStr = System.getProperty("eiffel.intelligence.waitListEventsCount");
-            int count = Integer.parseInt(countStr);
-            if (increase) {
-                count++;
-            } else {
-                count--;
-            }
-            System.setProperty("eiffel.intelligence.waitListEventsCount", "" + count);
-        }
+    public List<String> getWaitList() {
+        return mongoDbHandler.getAllDocuments(databaseName, collectionName);
     }
+
+    private String addPropertiesToEvent(String event, RulesObject rulesObject) {
+        String idRule = rulesObject.getIdRule();
+        JsonNode id = jmesPathInterface.runRuleOnEvent(idRule, event);
+        DateFormat dateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss");
+        Date date = new Date();
+        String time = dateFormat.format(date);
+        try {
+            date = dateFormat.parse(time);
+        } catch (ParseException e) {
+            LOGGER.error(e.getMessage(), e);
+        }
+        BasicDBObject document = new BasicDBObject();
+        document.put("_id", id.textValue());
+        document.put("Time", date);
+        document.put("Event", event);
+        mongoDbHandler.createTTLIndex(databaseName, collectionName, "Time", ttlValue);
+        return document.toString();
+    }
+
 }

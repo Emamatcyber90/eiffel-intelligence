@@ -19,6 +19,7 @@ import com.ericsson.ei.erqueryservice.SearchOption;
 import com.ericsson.ei.rules.RulesHandler;
 import com.ericsson.ei.rules.RulesObject;
 import com.fasterxml.jackson.databind.JsonNode;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -107,15 +108,22 @@ public class UpStreamEventsHandler {
             final String pathInAggregatedObject) {
 
         final JsonNode parent = jsonArray.get(0);
-        RulesObject rules = rulesHandler.getRulesForEvent(parent.toString());
+        JsonNode parentId = parent.at("/meta/id");
+        String np = pathInAggregatedObject;
+        if (!aggregatedObjectId.equals(parentId.textValue())) {
+            // parent event is not the same as the starting event so we can
+            // start collecting history
+            RulesObject rules = rulesHandler.getRulesForEvent(parent.toString());
 
-        final String np = historyExtractionHandler.runHistoryExtraction(aggregatedObjectId, rules, parent.toString(),
-                pathInAggregatedObject);
+            np = historyExtractionHandler.runHistoryExtraction(aggregatedObjectId, rules, parent.toString(),
+                    pathInAggregatedObject);
+        }
         String prevNp = null;
         for (int i = 1; i < jsonArray.size(); i++) {
             if (jsonArray.get(i).isObject()) {
-                rules = rulesHandler.getRulesForEvent(jsonArray.get(i).toString());
-                historyExtractionHandler.runHistoryExtraction(aggregatedObjectId, rules, jsonArray.get(i).toString(),
+                String event = jsonArray.get(i).toString();
+                RulesObject rules = rulesHandler.getRulesForEvent(event);
+                prevNp = historyExtractionHandler.runHistoryExtraction(aggregatedObjectId, rules, event,
                         pathInAggregatedObject);
             } else {
                 // if we have prevNp then we should use that because it is the
